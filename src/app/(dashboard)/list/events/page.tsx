@@ -4,164 +4,139 @@ import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
 import prisma from "@/lib/prisma";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Class, Event, Prisma } from "@prisma/client";
-import Image from "next/image";
-import { auth } from "@clerk/nextjs/server";
+import Link from "next/link";
 
-type EventList = Event & { class: Class };
+type EventList = {
+  id: number;
+  title: string;
+  description: string;
+  startDate: Date;
+  endDate: Date;
+  class: {
+    name: string;
+  };
+};
 
 const EventListPage = async ({
   searchParams,
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
-
-  const { userId, sessionClaims } = auth();
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
-  const currentUserId = userId;
+  const q = searchParams?.q || "";
+  const page = Number(searchParams?.page) || 1;
 
   const columns = [
     {
-      header: "Title",
+      header: "Titre",
       accessor: "title",
     },
     {
-      header: "Class",
+      header: "Description",
+      accessor: "description",
+      className: "hidden md:table-cell",
+    },
+    {
+      header: "Classe",
       accessor: "class",
-    },
-    {
-      header: "Date",
-      accessor: "date",
       className: "hidden md:table-cell",
     },
     {
-      header: "Start Time",
-      accessor: "startTime",
-      className: "hidden md:table-cell",
+      header: "Date de début",
+      accessor: "startDate",
+      className: "hidden lg:table-cell",
     },
     {
-      header: "End Time",
-      accessor: "endTime",
-      className: "hidden md:table-cell",
+      header: "Date de fin",
+      accessor: "endDate",
+      className: "hidden lg:table-cell",
     },
-    ...(role === "admin"
-      ? [
-          {
-            header: "Actions",
-            accessor: "action",
-          },
-        ]
-      : []),
+    {
+      header: "Actions",
+      accessor: "actions",
+      className: "w-24",
+    },
   ];
 
-  const renderRow = (item: EventList) => (
-    <tr
-      key={item.id}
-      className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
-    >
-      <td className="flex items-center gap-4 p-4">{item.title}</td>
-      <td>{item.class?.name || "-"}</td>
-      <td className="hidden md:table-cell">
-        {new Intl.DateTimeFormat("en-US").format(item.startTime)}
-      </td>
-      <td className="hidden md:table-cell">
-        {item.startTime.toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        })}
-      </td>
-      <td className="hidden md:table-cell">
-        {item.endTime.toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        })}
-      </td>
-      <td>
-        <div className="flex items-center gap-2">
-          {role === "admin" && (
-            <>
-              <FormContainer table="event" type="update" data={item} />
-              <FormContainer table="event" type="delete" id={item.id} />
-            </>
-          )}
-        </div>
-      </td>
-    </tr>
-  );
-
-  const { page, ...queryParams } = searchParams;
-
-  const p = page ? parseInt(page) : 1;
-
-  // URL PARAMS CONDITION
-
-  const query: Prisma.EventWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "search":
-            query.title = { contains: value, mode: "insensitive" };
-            break;
-          default:
-            break;
-        }
+  const where = q
+    ? {
+        OR: [
+          { title: { contains: q } },
+          { description: { contains: q } },
+          { class: { name: { contains: q } } },
+        ],
       }
+    : {};
+
+  const events = await prisma.event.findMany({
+    where,
+    include: {
+      class: {
+        select: {
+          name: true,
+        },
+      },
+    },
+    take: ITEM_PER_PAGE,
+    skip: (page - 1) * ITEM_PER_PAGE,
+  });
+
+  const count = await prisma.event.count({ where });
+
+  const formatDate = (date: Date | string | null) => {
+    if (!date) return "Non définie";
+    
+    try {
+      const dateObj = typeof date === "string" ? new Date(date) : date;
+      return new Intl.DateTimeFormat("fr-FR", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      }).format(dateObj);
+    } catch (error) {
+      console.error("Erreur de formatage de la date:", error);
+      return "Date invalide";
     }
-  }
-
-  // ROLE CONDITIONS
-
-  const roleConditions = {
-    teacher: { lessons: { some: { teacherId: currentUserId! } } },
-    student: { students: { some: { id: currentUserId! } } },
-    parent: { students: { some: { parentId: currentUserId! } } },
   };
 
-  query.OR = [
-    { classId: null },
-    {
-      class: roleConditions[role as keyof typeof roleConditions] || {},
-    },
-  ];
-
-  const [data, count] = await prisma.$transaction([
-    prisma.event.findMany({
-      where: query,
-      include: {
-        class: true,
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.event.count({ where: query }),
-  ]);
+  const data = events
+    .filter((event) => event.class) // Filtrer les événements sans classe
+    .map((event) => ({
+      id: event.id,
+      title: event.title || "Sans titre",
+      description: event.description || "Aucune description",
+      class: event.class.name,
+      startDate: formatDate(event.startDate),
+      endDate: formatDate(event.endDate),
+      actions: (
+        <div className="flex gap-2">
+          <Link href={`/list/events/${event.id}`}>
+            <button className="py-1 px-2 rounded-md bg-green-500 text-white">
+              Voir
+            </button>
+          </Link>
+          <form action="">
+            <input type="hidden" name="id" value={event.id} />
+            <button className="py-1 px-2 rounded-md bg-red-500 text-white">
+              Supprimer
+            </button>
+          </form>
+        </div>
+      ),
+    }));
 
   return (
-    <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
-      {/* TOP */}
-      <div className="flex items-center justify-between">
-        <h1 className="hidden md:block text-lg font-semibold">All Events</h1>
-        <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
-          <TableSearch />
-          <div className="flex items-center gap-4 self-end">
-            <button className="w-8 h-8 flex items-center justify-center rounded-full bg-lamaYellow">
-              <Image src="/filter.png" alt="" width={14} height={14} />
-            </button>
-            <button className="w-8 h-8 flex items-center justify-center rounded-full bg-lamaYellow">
-              <Image src="/sort.png" alt="" width={14} height={14} />
-            </button>
-            {role === "admin" && <FormContainer table="event" type="create" />}
-          </div>
-        </div>
+    <div className="bg-white p-6 rounded-lg shadow-sm">
+      <div className="flex items-center justify-between mb-8">
+        <TableSearch placeholder="Rechercher un événement..." />
+        <Link href="/list/events/add">
+          <button className="p-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 transition-colors">
+            Ajouter un événement
+          </button>
+        </Link>
       </div>
-      {/* LIST */}
-      <Table columns={columns} renderRow={renderRow} data={data} />
-      {/* PAGINATION */}
-      <Pagination page={p} count={count} />
+      <Table columns={columns} data={data} />
+      <Pagination count={count} />
+      <FormContainer />
     </div>
   );
 };

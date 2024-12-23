@@ -4,10 +4,9 @@ import Table from "@/components/Table";
 import TableSearch from "@/components/TableSearch";
 import prisma from "@/lib/prisma";
 import { ITEM_PER_PAGE } from "@/lib/settings";
-import { Parent, Prisma, Student } from "@prisma/client";
+import { Parent, Student } from "@prisma/client";
 import Image from "next/image";
-
-import { auth } from "@clerk/nextjs/server";
+import Link from "next/link";
 
 type ParentList = Parent & { students: Student[] };
 
@@ -16,126 +15,115 @@ const ParentListPage = async ({
 }: {
   searchParams: { [key: string]: string | undefined };
 }) => {
+  const q = searchParams?.q || "";
+  const page = Number(searchParams?.page) || 1;
 
-const { sessionClaims } = auth();
-const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const columns = [
+    {
+      header: "Info",
+      accessor: "info",
+    },
+    {
+      header: "ID",
+      accessor: "parentId",
+      className: "hidden md:table-cell",
+    },
+    {
+      header: "Enfants",
+      accessor: "students",
+      className: "hidden md:table-cell",
+    },
+    {
+      header: "Téléphone",
+      accessor: "phone",
+      className: "hidden lg:table-cell",
+    },
+    {
+      header: "Adresse",
+      accessor: "address",
+      className: "hidden lg:table-cell",
+    },
+    {
+      header: "Actions",
+      accessor: "actions",
+      className: "w-24",
+    },
+  ];
 
-
-const columns = [
-  {
-    header: "Info",
-    accessor: "info",
-  },
-  {
-    header: "Student Names",
-    accessor: "students",
-    className: "hidden md:table-cell",
-  },
-  {
-    header: "Phone",
-    accessor: "phone",
-    className: "hidden lg:table-cell",
-  },
-  {
-    header: "Address",
-    accessor: "address",
-    className: "hidden lg:table-cell",
-  },
-  ...(role === "admin"
-    ? [
-        {
-          header: "Actions",
-          accessor: "action",
-        },
-      ]
-    : []),
-];
-
-const renderRow = (item: ParentList) => (
-  <tr
-    key={item.id}
-    className="border-b border-gray-200 even:bg-slate-50 text-sm hover:bg-lamaPurpleLight"
-  >
-    <td className="flex items-center gap-4 p-4">
-      <div className="flex flex-col">
-        <h3 className="font-semibold">{item.name}</h3>
-        <p className="text-xs text-gray-500">{item?.email}</p>
-      </div>
-    </td>
-    <td className="hidden md:table-cell">
-      {item.students.map((student) => student.name).join(",")}
-    </td>
-    <td className="hidden md:table-cell">{item.phone}</td>
-    <td className="hidden md:table-cell">{item.address}</td>
-    <td>
-      <div className="flex items-center gap-2">
-        {role === "admin" && (
-          <>
-            <FormContainer table="parent" type="update" data={item} />
-            <FormContainer table="parent" type="delete" id={item.id} />
-          </>
-        )}
-      </div>
-    </td>
-  </tr>
-);
-
-  const { page, ...queryParams } = searchParams;
-
-  const p = page ? parseInt(page) : 1;
-
-  // URL PARAMS CONDITION
-
-  const query: Prisma.ParentWhereInput = {};
-
-  if (queryParams) {
-    for (const [key, value] of Object.entries(queryParams)) {
-      if (value !== undefined) {
-        switch (key) {
-          case "search":
-            query.name = { contains: value, mode: "insensitive" };
-            break;
-          default:
-            break;
-        }
+  const where = q
+    ? {
+        OR: [
+          { name: { contains: q } },
+          { surname: { contains: q } },
+          { email: { contains: q } },
+          { phone: { contains: q } },
+          { address: { contains: q } },
+        ],
       }
-    }
-  }
+    : {};
 
-  const [data, count] = await prisma.$transaction([
-    prisma.parent.findMany({
-      where: query,
-      include: {
-        students: true,
-      },
-      take: ITEM_PER_PAGE,
-      skip: ITEM_PER_PAGE * (p - 1),
-    }),
-    prisma.parent.count({ where: query }),
-  ]);
+  const parents = (await prisma.parent.findMany({
+    where,
+    include: {
+      students: true,
+    },
+    take: ITEM_PER_PAGE,
+    skip: (page - 1) * ITEM_PER_PAGE,
+  })) as ParentList[];
 
-  return (
-    <div className="bg-white p-4 rounded-md flex-1 m-4 mt-0">
-      {/* TOP */}
-      <div className="flex items-center justify-between">
-        <h1 className="hidden md:block text-lg font-semibold">All Parents</h1>
-        <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
-          <TableSearch />
-          <div className="flex items-center gap-4 self-end">
-            <button className="w-8 h-8 flex items-center justify-center rounded-full bg-lamaYellow">
-              <Image src="/filter.png" alt="" width={14} height={14} />
-            </button>
-            <button className="w-8 h-8 flex items-center justify-center rounded-full bg-lamaYellow">
-              <Image src="/sort.png" alt="" width={14} height={14} />
-            </button>
-            {role === "admin" && <FormContainer table="parent" type="create" />}
-          </div>
+  const count = await prisma.parent.count({ where });
+
+  const data = parents.map((parent) => ({
+    id: parent.id,
+    info: (
+      <div className="flex gap-4 items-center">
+        <Image
+          src={parent.img || "/noAvatar.png"}
+          alt={`Photo de ${parent.name}`}
+          width={40}
+          height={40}
+          className="rounded-full object-cover"
+        />
+        <div className="flex flex-col">
+          <span className="font-medium">{`${parent.name} ${parent.surname}`}</span>
+          <span className="text-sm text-gray-400">{parent.email}</span>
         </div>
       </div>
-      {/* LIST */}
-      <Table columns={columns} renderRow={renderRow} data={data} />
-      {/* PAGINATION */}
-      <Pagination page={p} count={count} />
+    ),
+    parentId: parent.id,
+    students: parent.students.map((s) => `${s.name} ${s.surname}`).join(", "),
+    phone: parent.phone || "Non renseigné",
+    address: parent.address || "Non renseigné",
+    actions: (
+      <div className="flex gap-2">
+        <Link href={`/list/parents/${parent.id}`}>
+          <button className="py-1 px-2 rounded-md bg-green-500 text-white">
+            Voir
+          </button>
+        </Link>
+        <form action="">
+          <input type="hidden" name="id" value={parent.id} />
+          <button className="py-1 px-2 rounded-md bg-red-500 text-white">
+            Supprimer
+          </button>
+        </form>
+      </div>
+    ),
+  }));
+
+  return (
+    <div className="bg-white p-6 rounded-lg shadow-sm">
+      <div className="flex items-center justify-between mb-8">
+        <TableSearch placeholder="Rechercher un parent..." />
+        <Link href="/list/parents/add">
+          <button className="p-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 transition-colors">
+            Ajouter un parent
+          </button>
+        </Link>
+      </div>
+      <Table columns={columns} data={data} />
+      <Pagination count={count} />
+      <FormContainer />
     </div>
   );
 };
